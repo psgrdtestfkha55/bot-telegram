@@ -207,3 +207,11 @@ TUTORIAL_PROMPT = os.getenv(
 # هشدار سرویس وقتی حجم باقی‌مانده از این مقدار کمتر شد (گیگ)
 SERVICE_WARN_REMAINING_GB = float(os.getenv("SERVICE_WARN_REMAINING_GB", "1"))
 SERVICE_WATCH_INTERVAL_SEC = int(os.getenv("SERVICE_WATCH_INTERVAL_SEC", "600"))
+
+# ---------- کش‌بک خرید ----------
+# حجم خرید >= CASHBACK_MIN_GB → CASHBACK_PERCENT٪ مبلغ به کیف پول
+# حجم 0 (نامحدود): اگر CASHBACK_ON_UNLIMITED=1 شامل می‌شود
+CASHBACK_ENABLED = os.getenv("CASHBACK_ENABLED", "1").strip() not in ("0", "false", "False", "no")
+CASHBACK_MIN_GB = float(os.getenv("CASHBACK_MIN_GB", "20"))
+CASHBACK_PERCENT = float(os.getenv("CASHBACK_PERCENT", "5"))
+CASHBACK_ON_UNLIMITED = os.getenv("CASHBACK_ON_UNLIMITED", "1").strip() not in ("0", "false", "False", "no")

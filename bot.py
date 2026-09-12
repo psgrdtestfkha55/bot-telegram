@@ -334,11 +334,13 @@ def order_summary_text(order) -> str:
             f"🎟 کد تخفیف: {order['coupon_code']}\n"
             f"💰 قیمت نهایی: {order['price']:,} تومان"
         )
+    cashback = _cashback_hint_text(int(order["price"] or 0))
     return (
         f"🧾 <b>خلاصه سفارش شما</b>\n"
         f"—————————————\n"
         f"📦 {order['plan_name']}\n"
         f"{price_block}\n"
+        f"{cashback}"
         f"—————————————\n\n"
         f"💳 شماره کارت: <code>{config.CARD_NUMBER}</code>\n"
         f"👤 به نام: {config.CARD_HOLDER}\n\n"
@@ -3060,6 +3062,86 @@ async def _parse_order_panel_spec(order) -> dict:
     return _spec_from_label(plan_name or "")
 
 
+
+def _cashback_amount_for_gb(volume_gb, price: int) -> int:
+    if not getattr(config, "CASHBACK_ENABLED", False):
+        return 0
+    if not price or price <= 0:
+        return 0
+    pct = float(getattr(config, "CASHBACK_PERCENT", 0) or 0)
+    if pct <= 0:
+        return 0
+    min_gb = float(getattr(config, "CASHBACK_MIN_GB", 0) or 0)
+    try:
+        vol = float(volume_gb) if volume_gb is not None else -1.0
+    except (TypeError, ValueError):
+        vol = -1.0
+    if vol == 0:
+        if not getattr(config, "CASHBACK_ON_UNLIMITED", True):
+            return 0
+    elif vol < 0 or vol < min_gb:
+        return 0
+    return max(0, int(price * pct / 100))
+
+
+def _cashback_hint_text(price: int = 0) -> str:
+    if not getattr(config, "CASHBACK_ENABLED", False):
+        return ""
+    pct = float(getattr(config, "CASHBACK_PERCENT", 0) or 0)
+    min_gb = float(getattr(config, "CASHBACK_MIN_GB", 0) or 0)
+    if pct <= 0:
+        return ""
+    return (
+        f"\n🎁 <b>کش‌بک:</b> با خرید از <b>{min_gb:g} گیگ</b> به بالا، "
+        f"<b>{pct:g}٪</b> مبلغ بعد از تحویل به کیف پولت برمی‌گردد.\n"
+    )
+
+
+async def _process_purchase_cashback(order, order_id: int) -> None:
+    if not getattr(config, "CASHBACK_ENABLED", False):
+        return
+    try:
+        spec = await _parse_order_panel_spec(order)
+        vol = float(spec.get("data_limit_gb") or 0)
+        amount = _cashback_amount_for_gb(vol, int(order["price"] or 0))
+    except Exception:
+        logging.exception("cashback calc failed")
+        return
+    if amount <= 0:
+        return
+    uid = order["user_id"]
+    try:
+        await db.add_wallet_balance(uid, amount)
+    except Exception:
+        logging.exception("cashback wallet credit")
+        return
+    try:
+        await bot.send_message(
+            uid,
+            (
+                f"🎁 <b>کش‌بک خرید</b>\n"
+                f"از سفارش #{order_id} مبلغ <b>{amount:,} تومان</b> به کیف پولت اضافه شد."
+            ),
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logging.warning("cashback notify user: %s", e)
+    for admin_id in config.ADMIN_IDS:
+        try:
+            await bot.send_message(
+                admin_id,
+                (
+                    f"🎁 کش‌بک واریز شد\n"
+                    f"👤 <code>{uid}</code>\n"
+                    f"🆔 order #{order_id}\n"
+                    f"💰 {amount:,} تومان"
+                ),
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
+
+
 async def _process_referral_commission(order, order_id: int) -> None:
     referral = await db.get_referral_by_referred(order["user_id"])
     if not referral:
@@ -3165,6 +3247,7 @@ async def admin_approve(callback: CallbackQuery, state: FSMContext):
                     f"✅ سفارش #{order_id} ساخته و برای مشتری ارسال شد.\n🔑 {result['username']}"
                 )
             await _process_referral_commission(order, order_id)
+            await _process_purchase_cashback(order, order_id)
         except Exception as e:
             logging.exception("Auto service create failed")
             try:
@@ -3216,6 +3299,7 @@ async def admin_send_panel_info(message: Message, state: FSMContext):
         await message.answer(f"⚠️ ارسال به کاربر ناموفق بود: {e}")
 
     await _process_referral_commission(order, order_id)
+    await _process_purchase_cashback(order, order_id)
 
 
 @dp.callback_query(F.data.startswith("reject:"))
